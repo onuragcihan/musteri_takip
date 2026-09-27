@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 DB_NAME = "musteri_takip_web.db"
-SISTEM_SIFRESI = "010162"
+SISTEM_SIFRESI = "010158"
 
 # --- VERİTABANI İŞLEMLERİ ---
 def db_init():

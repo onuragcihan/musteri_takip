@@ -76,6 +76,17 @@ with tab1:
     df_siparisler = pd.read_sql_query("SELECT * FROM siparisler", conn)
     conn.close()
 
+    # Eksik sütun kontrolü ve tamamlama
+    gerekli_sutunlar = ["musteri_adi", "urun_siparis", "adet", "birim_fiyati", "toplam_tutar", "tarih", "notlar"]
+    for col in gerekli_sutunlar:
+        if col not in df_siparisler.columns:
+            if col in ["adet"]:
+                df_siparisler[col] = 1
+            elif col in ["birim_fiyati", "toplam_tutar"]:
+                df_siparisler[col] = 0.0
+            else:
+                df_siparisler[col] = ""
+
     if df_siparisler.empty:
         df_siparisler = pd.DataFrame({
             "musteri_adi": [""],
@@ -89,12 +100,11 @@ with tab1:
 
     # Etkileşimli Excel Tablosu
     edited_df = st.data_editor(
-        df_siparisler,
+        df_siparisler[gerekli_sutunlar],
         num_rows="dynamic",
         use_container_width=True,
         key="siparis_editor",
         column_config={
-            "id": None, # ID gizle
             "musteri_adi": st.column_config.TextColumn("Müşteri Adı Soyadı", required=True),
             "urun_siparis": st.column_config.TextColumn("Ürün / Sipariş Adı"),
             "adet": st.column_config.NumberColumn("Adet", min_value=1, default=1),
@@ -133,9 +143,18 @@ with tab2:
     df_odeme = pd.read_sql_query("SELECT * FROM odemeler", conn)
     conn.close()
 
+    # Güvenlik: Eksik sütun kontrolü
+    for col in ["musteri_adi", "urun_siparis", "adet", "birim_fiyati", "toplam_tutar", "tarih", "notlar"]:
+        if col not in df_sip.columns:
+            df_sip[col] = 0.0 if "tutar" in col or "fiyati" in col else ""
+
+    for col in ["musteri_adi", "odenen_tutar", "tarih", "notlar"]:
+        if col not in df_odeme.columns:
+            df_odeme[col] = 0.0 if "tutar" in col else ""
+
     # Müşteri Listesini Oluştur
     tum_musteriler = list(set(df_sip['musteri_adi'].dropna().tolist() + df_odeme['musteri_adi'].dropna().tolist()))
-    tum_musteriler = [m for m in tum_musteriler if m.strip() != ""]
+    tum_musteriler = [str(m).strip() for m in tum_musteriler if str(m).strip() != ""]
 
     if tum_musteriler:
         secilen_m = st.selectbox("Müşteri Seçiniz:", sorted(tum_musteriler))
@@ -144,8 +163,8 @@ with tab2:
         m_sip = df_sip[df_sip['musteri_adi'] == secilen_m]
         m_odeme = df_odeme[df_odeme['musteri_adi'] == secilen_m]
         
-        toplam_siparis_borcu = m_sip['toplam_tutar'].sum()
-        toplam_odenen = m_odeme['odenen_tutar'].sum()
+        toplam_siparis_borcu = pd.to_numeric(m_sip['toplam_tutar'], errors='coerce').sum()
+        toplam_odenen = pd.to_numeric(m_odeme['odenen_tutar'], errors='coerce').sum()
         kalan_net_borc = toplam_siparis_borcu - toplam_odenen
 
         # Özet Kartları
@@ -174,8 +193,11 @@ with tab3:
     df_sip = pd.read_sql_query("SELECT * FROM siparisler", conn)
     conn.close()
     
-    musteri_listesi = sorted(list(set(df_sip['musteri_adi'].dropna().tolist())))
-    musteri_listesi = [m for m in musteri_listesi if m.strip() != ""]
+    if "musteri_adi" in df_sip.columns:
+        musteri_listesi = sorted(list(set(df_sip['musteri_adi'].dropna().tolist())))
+        musteri_listesi = [str(m).strip() for m in musteri_listesi if str(m).strip() != ""]
+    else:
+        musteri_listesi = []
 
     if musteri_listesi:
         odeme_musteri = st.selectbox("Ödeme Yapan Müşteri:", musteri_listesi, key="odeme_m_sec")

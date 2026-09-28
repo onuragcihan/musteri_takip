@@ -1,224 +1,181 @@
-import sqlite3
-import datetime
 import streamlit as st
+import sqlite3
+import pandas as pd
+from datetime import datetime
 
-# --- SAYFA YAPILANDIRMASI ---
+# --- Sayfa Ayarları ---
 st.set_page_config(
-    page_title="Müşteri Borç Takip Sistemi",
-    page_icon="💰",
+    page_title="Müşteri Borç ve Sipariş Takibi",
+    page_icon="📋",
     layout="wide"
 )
 
+# --- Veritabanı Kurulumu ---
 DB_NAME = "musteri_takip_web.db"
-SISTEM_SIFRESI = "010158"
 
-# --- VERİTABANI İŞLEMLERİ ---
-def db_init():
+def init_db():
     conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS musteriler (
+    c = conn.cursor()
+    # Borç Takip Tablosu
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS islemler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ad TEXT NOT NULL,
-            tarih TEXT NOT NULL,
-            borc REAL NOT NULL,
-            not_bilgisi TEXT
+            musteri_adi TEXT,
+            islem_tipi TEXT,
+            tutar REAL,
+            tarih TEXT,
+            not_alani TEXT
         )
-    """)
+    ''')
+    # Sipariş Takip Tablosu (Excel Modu)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS siparisler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            musteri_adi TEXT,
+            siparis_detayi TEXT,
+            adet INTEGER,
+            birim_fiyati REAL,
+            toplam_tutar REAL,
+            tarih TEXT,
+            notlar TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
-def db_tum_kayitlari_getir():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, tarih, ad, borc, not_bilgisi FROM musteriler ORDER BY id DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+init_db()
 
-def db_kayit_ekle(ad, tarih, borc, not_bilgisi):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO musteriler (ad, tarih, borc, not_bilgisi)
-        VALUES (?, ?, ?, ?)
-    """, (ad, tarih, borc, not_bilgisi))
-    conn.commit()
-    conn.close()
+# --- Şifre Kontrolü ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
 
-def db_kayit_guncelle(row_id, ad, tarih, borc, not_bilgisi):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE musteriler
-        SET ad = ?, tarih = ?, borc = ?, not_bilgisi = ?
-        WHERE id = ?
-    """, (ad, tarih, borc, not_bilgisi, row_id))
-    conn.commit()
-    conn.close()
-
-def db_kayit_sil(row_id):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM musteriler WHERE id = ?", (row_id,))
-    conn.commit()
-    conn.close()
-
-def format_borc(val):
-    return f"{val:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
-
-# --- BAŞLANGIÇ AYARLARI ---
-db_init()
-
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
-
-# --- ŞİFRE GİRİŞ EKRANI ---
-if not st.session_state["authenticated"]:
-    st.markdown("<h2 style='text-align: center;'>🔒 Müşteri Borç Takip - Giriş</h2>", unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        girilen_sifre = st.text_input("Sistem Şifresi:", type="password", key="sifre_input")
-        if st.button("Giriş Yap", use_container_width=True, type="primary"):
-            if girilen_sifre == SISTEM_SIFRESI:
-                st.session_state["authenticated"] = True
-                st.rerun()
-            else:
-                st.error("Hatalı şifre! Lütfen tekrar deneyin.")
+if not st.session_state['logged_in']:
+    st.title("🔒 Müşteri Takip Sistemi Girişi")
+    sifre_girdisi = st.text_input("Lütfen Giriş Şifresini Girin:", type="password")
+    if st.button("Giriş Yap"):
+        if sifre_girdisi == "010162":
+            st.session_state['logged_in'] = True
+            st.success("Giriş başarılı!")
+            st.rerun()
+        else:
+            st.error("Hatalı şifre!")
     st.stop()
 
-# --- ANA UYGULAMA EKRANI ---
-st.title("💰 Müşteri Borç Kayıt Paneli")
+# --- Ana Menü (Sekmeler) ---
+tab1, tab2 = st.tabs(["💰 Borç ve Ödeme Takibi", "📦 Sipariş Takibi (Excel Modu)"])
 
-# Çıkış Yap Butonu (Yan panelde)
-with st.sidebar:
-    st.write("🔑 **Oturum Bilgisi**")
-    if st.button("Çıkış Yap"):
-        st.session_state["authenticated"] = False
-        st.rerun()
-
-# --- VERİLERİ YÜKLE VE TOPLAM BORÇ HESAPLA ---
-rows = db_tum_kayitlari_getir()
-toplam_borc = sum(row[3] for row in rows)
-
-# Toplam Borç Metrik Kartı
-st.metric(label="📊 Toplam Borç Tutarı", value=format_borc(toplam_borc))
-
-st.markdown("---")
-
-# --- YENİ KAYIT EKLEME FORMU ---
-with st.expander("➕ Yeni Müşteri / Borç Kaydı Ekle", expanded=True):
-    with st.form("yeni_kayit_formu", clear_on_submit=True):
-        col_tarih, col_ad, col_borc = st.columns([1, 2, 1])
-        
-        with col_tarih:
-            tarih_val = st.date_input("Tarih", value=datetime.date.today(), format="DD.MM.YYYY")
-        with col_ad:
-            ad_val = st.text_input("Müşteri Adı *")
-        with col_borc:
-            borc_val = st.number_input("Borç Miktarı (TL) *", min_value=0.0, step=50.0, format="%.2f")
-            
-        not_val = st.text_input("Not / Ödeme Bilgisi (Opsiyonel)")
-        
-        btn_ekle = st.form_submit_button("Kaydı Ekle", type="primary", use_container_width=True)
-        
-        if btn_ekle:
-            if not ad_val.strip():
-                st.warning("Lütfen Müşteri Adı alanını doldurun!")
-            elif borc_val <= 0:
-                st.warning("Lütfen geçerli bir borç miktarı girin!")
-            else:
-                tarih_str = tarih_val.strftime("%d.%m.%Y")
-                db_kayit_ekle(ad_val.strip(), tarih_str, borc_val, not_val.strip())
-                st.success(f"'{ad_val}' kaydı başarıyla eklendi.")
-                st.rerun()
-
-# --- KAYIT LİSTESİ VE YÖNETİMİ ---
-st.subheader("📋 Müşteri Kayıtları")
-
-if not rows:
-    st.info("Henüz kayıtlı müşteri bulunmamaktadır.")
-else:
-    # Arama Filtresi
-    arama_termi = st.text_input("🔍 Müşteri Adına Göre Ara:", "")
+# ==========================================
+# 1. SEKME: BORÇ VE ÖDEME TAKİBİ
+# ==========================================
+with tab1:
+    st.header("Müşteri Borç ve Ödeme İşlemleri")
     
-    filtered_rows = [
-        r for r in rows if arama_termi.lower() in r[2].lower()
-    ] if arama_termi else rows
-
-    # Kayıtları Tablo Halinde Göster
-    for row in filtered_rows:
-        row_id, tarih, ad, borc_val, not_bilgisi = row
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.subheader("Yeni İşlem Ekle")
+        musteri_adi = st.text_input("Müşteri Adı Soyadı:")
+        islem_tipi = st.selectbox("İşlem Tipi:", ["Borç Ekle", "Ödeme Alındı"])
+        tutar = st.number_input("Tutar (TL):", min_value=0.0, step=10.0)
+        not_alani = st.text_area("İşlem Notu (İsteğe Bağlı):")
         
-        with st.container():
-            c1, c2, c3, c4, c5 = st.columns([1.2, 2, 1.5, 2.5, 2])
+        if st.button("İşlemi Kaydet"):
+            if musteri_adi.strip() != "" and tutar > 0:
+                bugun = datetime.now().strftime("%Y-%m-%d %H:%M")
+                conn = sqlite3.connect(DB_NAME)
+                c = conn.cursor()
+                c.execute(
+                    "INSERT INTO islemler (musteri_adi, islem_tipi, tutar, tarih, not_alani) VALUES (?, ?, ?, ?, ?)",
+                    (musteri_adi.strip(), islem_tipi, tutar, bugun, not_alani)
+                )
+                conn.commit()
+                conn.close()
+                st.success(f"{musteri_adi} için {islem_tipi} kaydedildi!")
+                st.rerun()
+            else:
+                st.warning("Lütfen müşteri adı ve tutar giriniz.")
+
+    with col2:
+        st.subheader("Müşteri Bakiye Sorgulama")
+        conn = sqlite3.connect(DB_NAME)
+        df_islemler = pd.read_sql_query("SELECT * FROM islemler ORDER BY id DESC", conn)
+        conn.close()
+        
+        if not df_islemler.empty:
+            musteri_listesi = ["Tüm Müşteriler"] + sorted(df_islemler['musteri_adi'].unique().tolist())
+            secilen_musteri = st.selectbox("Müşteri Seçin:", musteri_listesi)
             
-            c1.write(f"📅 **{tarih}**")
-            c2.write(f"👤 **{ad}**")
-            c3.write(f"🔴 **{format_borc(borc_val)}**")
-            c4.write(f"📝 {not_bilgisi if not_bilgisi else '-'}")
+            if secilen_musteri != "Tüm Müşteriler":
+                filtreli_df = df_islemler[df_islemler['musteri_adi'] == secilen_musteri]
+                toplam_borc = filtreli_df[filtreli_df['islem_tipi'] == "Borç Ekle"]['tutar'].sum()
+                toplam_odeme = filtreli_df[filtreli_df['islem_tipi'] == "Ödeme Alındı"]['tutar'].sum()
+                kalan_bakiye = toplam_borc - toplam_odeme
+                
+                st.metric("Kalan Borç Bakiyesi", f"{kalan_bakiye:,.2f} TL")
+                st.dataframe(filtreli_df[['tarih', 'musteri_adi', 'islem_tipi', 'tutar', 'not_alani']], use_container_width=True)
+            else:
+                st.dataframe(df_islemler[['tarih', 'musteri_adi', 'islem_tipi', 'tutar', 'not_alani']], use_container_width=True)
+
+# ==========================================
+# 2. SEKME: SİPARİŞ TAKİBİ (EXCEL MODU)
+# ==========================================
+with tab2:
+    st.header("Sipariş Takip Tablosu (Excel Modu)")
+    st.info("💡 **Nasıl Kullanılır?** Tablodaki hücrelere tıklayarak doğrudan yazabilirsiniz. Alt taraftaki **'+'** ikonuna basarak yeni satır ekleyebilir, **'💾 Değişiklikleri Kaydet'** butonu ile kaydedebilirsiniz.")
+
+    conn = sqlite3.connect(DB_NAME)
+    df_siparisler = pd.read_sql_query("SELECT * FROM siparisler", conn)
+    conn.close()
+
+    # Kolon isimleri ve varsayılan veri tipi düzenlemesi
+    if df_siparisler.empty:
+        df_siparisler = pd.DataFrame({
+            "musteri_adi": ["---"],
+            "siparis_detayi": ["---"],
+            "adet": [1],
+            "birim_fiyati": [0.0],
+            "toplam_tutar": [0.0],
+            "tarih": [datetime.now().strftime("%Y-%m-%d")],
+            "notlar": ["-"]
+        })
+
+    # Etkileşimli Excel Tablosu (st.data_editor)
+    edited_df = st.data_editor(
+        df_siparisler,
+        num_rows="dynamic",  # Satır ekleme/silme imkanı verir
+        use_container_width=True,
+        key="siparis_editor",
+        column_config={
+            "id": None, # ID sütununu gizle
+            "musteri_adi": st.column_config.TextColumn("Müşteri Adı", required=True),
+            "siparis_detayi": st.column_config.TextColumn("Sipariş / Ürün Detayı"),
+            "adet": st.column_config.NumberColumn("Adet", min_value=1, default=1),
+            "birim_fiyati": st.column_config.NumberColumn("Birim Fiyatı (TL)", format="%.2f TL", default=0.0),
+            "toplam_tutar": st.column_config.NumberColumn("Toplam Tutar (TL)", format="%.2f TL", disabled=True),
+            "tarih": st.column_config.TextColumn("Tarih"),
+            "notlar": st.column_config.TextColumn("Notlar")
+        }
+    )
+
+    col_btn1, col_btn2 = st.columns([1, 4])
+    with col_btn1:
+        if st.button("💾 Değişiklikleri Kaydet"):
+            # Otomatik Toplam Tutar Hesabı
+            edited_df["toplam_tutar"] = edited_df["adet"] * edited_df["birim_fiyati"]
             
-            # İşlem Butonları (Düzenle / Ödeme Al / Sil)
-            with c5:
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    btn_odeme = st.button("💳 Ödeme", key=f"odeme_{row_id}")
-                with col_btn2:
-                    btn_islem = st.button("⚙️ Yönet", key=f"yonet_{row_id}")
+            # Veritabanına Yaz
+            conn = sqlite3.connect(DB_NAME)
+            edited_df.to_sql("siparisler", conn, if_exists="replace", index=False)
+            conn.close()
+            st.success("Tüm sipariş verileri başarıyla kaydedildi!")
+            st.rerun()
 
-            # --- ÖDEME ALMA MODALI/PANELİ ---
-            if btn_odeme:
-                st.session_state[f"active_odeme_{row_id}"] = True
-
-            if st.session_state.get(f"active_odeme_{row_id}", False):
-                with st.form(key=f"odeme_form_{row_id}"):
-                    st.write(f"### 💳 Ödeme Al: {ad}")
-                    st.write(f"Mevcut Borç: **{format_borc(borc_val)}**")
-                    
-                    odeme_tutari = st.number_input("Alınan Ödeme Tutarı (TL):", min_value=0.01, max_value=float(borc_val), step=10.0, format="%.2f")
-                    
-                    c_odeme_submit, c_odeme_cancel = st.columns(2)
-                    with c_odeme_submit:
-                        if st.form_submit_button("Ödemeyi Onayla", type="primary"):
-                            yeni_borc = borc_val - odeme_tutari
-                            db_kayit_guncelle(row_id, ad, tarih, yeni_borc, not_bilgisi)
-                            st.session_state[f"active_odeme_{row_id}"] = False
-                            st.success("Ödeme düşüldü!")
-                            st.rerun()
-                    with c_odeme_cancel:
-                        if st.form_submit_button("İptal"):
-                            st.session_state[f"active_odeme_{row_id}"] = False
-                            st.rerun()
-
-            # --- DÜZENLEME VEYA SİLME PANELİ ---
-            if btn_islem:
-                st.session_state[f"active_edit_{row_id}"] = True
-
-            if st.session_state.get(f"active_edit_{row_id}", False):
-                with st.form(key=f"edit_form_{row_id}"):
-                    st.write(f"### ✏️ Kaydı Düzenle: {ad}")
-                    
-                    e_tarih = st.text_input("Tarih", value=tarih)
-                    e_ad = st.text_input("Müşteri Adı", value=ad)
-                    e_borc = st.number_input("Borç (TL)", value=float(borc_val), min_value=0.0, format="%.2f")
-                    e_not = st.text_input("Not", value=not_bilgisi if not_bilgisi else "")
-
-                    c_save, c_del, c_cancel = st.columns(3)
-                    with c_save:
-                        if st.form_submit_button("💾 Kaydet", type="primary"):
-                            db_kayit_guncelle(row_id, e_ad.strip(), e_tarih.strip(), e_borc, e_not.strip())
-                            st.session_state[f"active_edit_{row_id}"] = False
-                            st.success("Güncellendi!")
-                            st.rerun()
-                    with c_del:
-                        if st.form_submit_button("🗑️ Kaydı Sil"):
-                            db_kayit_sil(row_id)
-                            st.session_state[f"active_edit_{row_id}"] = False
-                            st.warning("Kayıt silindi.")
-                            st.rerun()
-                    with c_cancel:
-                        if st.form_submit_button("Kapat"):
-                            st.session_state[f"active_edit_{row_id}"] = False
-                            st.rerun()
-            st.divider()
+    with col_btn2:
+        # Excel / CSV İndirme Butonu
+        csv = edited_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Tabloyu İndir (CSV/Excel)",
+            data=csv,
+            file_name=f"siparisler_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
